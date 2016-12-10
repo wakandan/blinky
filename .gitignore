@@ -1,0 +1,5 @@
+*.eep
+*.hex
+*.o
+*.swp
+.dep/
