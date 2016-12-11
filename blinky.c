@@ -56,12 +56,11 @@ const unsigned char morse_code_table[];
 #define ROTPIN PIND
 #define ROTA !((1<<ROTPA)&ROTPIN)
 #define ROTB !((1<<ROTPB)&ROTPIN)
-
-void Timer2_Start(void)
-{
-    TCCR2|=(1<<CS22)|(1<<CS21); //prescaller 256 ~122 interrupts/s
-    TIMSK|=(1<<TOIE2);//Enable Timer0 Overflow interrupts
-}
+#define PIN_ENCODER_A 5
+#define PIN_ENCODER_B 4
+#define TRINKET_PINx  PIND
+static uint8_t enc_prev_pos = 0;
+static uint8_t enc_flags    = 0;
 
 int main(void)
 {
@@ -81,14 +80,6 @@ int main(void)
   DDRD &= ~(PIN_7 | PIN_4 | PIN_5); //pin4,5,7 are all inputs
   int lastValue = 0;
   int value = 1;
-  int counter = 0;
-  int state = 0;
-  int stateB = 0;
-  int lastState = PIND & PIN_4;
-  int lastStateB = PIND & PIN_5;
-  int isAstable = 0;
-  int isBstable = 0;
-	int rotarystatus = 0;
   int wait = 0;
   char str[16];
   
@@ -105,68 +96,77 @@ int main(void)
         lastValue = value;
       }
     }
-
-		 if(ROTA & (!wait))
-        wait=1;
-    if (ROTB & ROTA & (wait))
-        {
-            rotarystatus=2;
-            pchar(rotarystatus+32);
-            wait=2;
-        }
-        else if(ROTA & (!ROTB) & wait)
-        {
-            rotarystatus=1;
-            pchar(rotarystatus+32);
-            wait=2;    
-        }
-    if ((!ROTA)&!(ROTB)&(wait==2))
-        wait=0;
-    //if(ROTA & (!ROTB)){
-		//loop_until_bit_is_set(ROTPIN, ROTPA);
-		//if (ROTB)
-		//		rotarystatus=1;
-		////check if rotation is right
-		//}else if(ROTB & (!ROTA)){
-		//		loop_until_bit_is_set(ROTPIN, ROTPB);
-		//		if (ROTA)
-		//				rotarystatus=2;
-		//}else if (ROTA & ROTB){
-		//		loop_until_bit_is_set(ROTPIN, ROTPA);
-		//		if (ROTB)
-		//				rotarystatus=1;
-		//		 else rotarystatus=2;
-		//}
-
-    //state = PIND & PIN_4;
-    //if(state!=lastState){
-    //  _delay_ms(5); //debounce
-    //  if((PIND & PIN_4)!=lastState){ //pin 4 stabilized
-    //    isAstable = 1;
-    //  }
-    //}
-    //stateB = PIND & PIN_5;
-    //if(stateB != lastStateB) {
-    //  _delay_ms(5);
-    //  if((PIND & PIN_5)!=lastStateB) { //pin 5 stabilized
-    //    isBstable = 1;
-    //  }
-    //}
-    //if(state!=stateB && isAstable==1 && isBstable==1){
-    //  print("encoder changed\n");
-    //}
-    //lastStateB = stateB;
-    //lastState = state;
-    //isAstable = 0;
-    //isBstable = 0;
-
-    //reading encoder input
-    //for (i=0; i<6; i++) {
-    //  morse_P(PSTR("SOS"));
-    //  _delay_ms(1500);
-    //}
-    //morse_P(PSTR("DOES ANYBODY STILL KNOW MORSE CODE?"));
-    //_delay_ms(4000);
+  
+  int8_t enc_action = 0; // 1 or -1 if moved, sign is direction
+  //pchar((PIND & PIN_4) + 32);
+  //pchar((PIND & PIN_5) + 32);
+ 
+  uint8_t enc_cur_pos = 0;
+  // read in the encoder state first
+  if (bit_is_clear(TRINKET_PINx, PIN_ENCODER_A)) {
+    enc_cur_pos |= (1 << 0);
+  }
+  if (bit_is_clear(TRINKET_PINx, PIN_ENCODER_B)) {
+    enc_cur_pos |= (1 << 1);
+  }
+ 
+  // if any rotation at all
+  if (enc_cur_pos != enc_prev_pos)
+  {
+    if (enc_prev_pos == 0x00)
+    {
+      // this is the first edge
+      if (enc_cur_pos == 0x01) {
+        enc_flags |= (1 << 0);
+      }
+      else if (enc_cur_pos == 0x02) {
+        enc_flags |= (1 << 1);
+      }
+    }
+ 
+    if (enc_cur_pos == 0x03)
+    {
+      // this is when the encoder is in the middle of a "step"
+      enc_flags |= (1 << 4);
+    }
+    else if (enc_cur_pos == 0x00)
+    {
+      // this is the final edge
+      if (enc_prev_pos == 0x02) {
+        enc_flags |= (1 << 2);
+      }
+      else if (enc_prev_pos == 0x01) {
+        enc_flags |= (1 << 3);
+      }
+ 
+      // check the first and last edge
+      // or maybe one edge is missing, if missing then require the middle state
+      // this will reject bounces and false movements
+      if (bit_is_set(enc_flags, 0) && (bit_is_set(enc_flags, 2) || bit_is_set(enc_flags, 4))) {
+        enc_action = 1;
+      }
+      else if (bit_is_set(enc_flags, 2) && (bit_is_set(enc_flags, 0) || bit_is_set(enc_flags, 4))) {
+        enc_action = 1;
+      }
+      else if (bit_is_set(enc_flags, 1) && (bit_is_set(enc_flags, 3) || bit_is_set(enc_flags, 4))) {
+        enc_action = -1;
+      }
+      else if (bit_is_set(enc_flags, 3) && (bit_is_set(enc_flags, 1) || bit_is_set(enc_flags, 4))) {
+        enc_action = -1;
+      }
+ 
+      enc_flags = 0; // reset for next time
+    }
+  }
+ 
+  enc_prev_pos = enc_cur_pos;
+ 
+  if (enc_action > 0) {
+    print("up\n");
+  }
+  else if (enc_action < 0) {
+    print("down\n");
+  }
   }
 }
 
